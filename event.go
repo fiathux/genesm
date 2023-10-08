@@ -1,20 +1,28 @@
 package genesm
 
+// Event represent a event to change state on state matchine
 type Event[O any, A any, B any] interface {
 	SetHook(hook func(O, A, B) error)
 	Trigger() error
 }
 
+// eventBind implement a Event. it will regist to StateMachine. then provide
+// methods to hook or trigger state change.
 type eventBind[O any, A any, B any] struct {
 	sm *StateMachine[O]
-	a  StateBind[O, A]
-	b  StateBind[O, B]
+	a  StateBinder[O, A]
+	b  StateBinder[O, B]
 
 	hook func(O, A, B) error
 }
 
+// RegEvent regist an event rule to state machine
+//
+// A event rule is path to change state from one (a) to next one (b).
+//
+// it return Event interface to let developer to trigger it.
 func RegEvent[O any, A any, B any](
-	sm *StateMachine[O], a StateBind[O, A], b StateBind[O, B],
+	sm *StateMachine[O], a StateBinder[O, A], b StateBinder[O, B],
 ) Event[O, A, B] {
 	if a.Parent() != sm {
 		panic("state (a) is not be owned under specified StateMachine")
@@ -29,12 +37,15 @@ func RegEvent[O any, A any, B any](
 	}
 }
 
+// SetHook set a hook function that allow developer check contain data of each
+// State. if an error is be returned, event will be canceled as well.
 func (eb *eventBind[O, A, B]) SetHook(
 	hook func(O, A, B) error,
 ) {
 	eb.hook = hook
 }
 
+// Trigger use to trigger event
 func (eb *eventBind[O, A, B]) Trigger() (rerr error) {
 	eb.sm.transform(func(curID StateID) StateID {
 		if curID != eb.a.ID() {
