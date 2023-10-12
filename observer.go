@@ -20,8 +20,14 @@ const (
 // maxFrameRate is max frame rate limitation for all time based observer
 const maxFrameRate = 200
 
-// errors
-var ErrObInvalidFrameRate = errors.New("invalid frame rate")
+// Obbserve errors
+var (
+	ErrObInvalidFrameRate = errors.New("invalid frame rate")
+	ErrObRequired         = errors.New("ob can not be nil")
+	ErrObTickerRequired   = errors.New("ticker can not be nil")
+	ErrObNoBound          = errors.New("no observer bound")
+	ErrObBeenBound        = errors.New("observer already bound to a state")
+)
 
 // Observer represent a observer of state machine.
 //
@@ -42,11 +48,11 @@ type Observer[O any, T any] interface {
 	// Warning is a channel to report warning from observer handler
 	Warning() <-chan ObWarning
 
+	startOb(owner O, id StateID, val T, selected bool) error
 	enter(owner O, id StateID, val T)
 	exit(owner O, id StateID, val T)
 	pick(owner O, id StateID, val T)
 	update(owner O, id StateID, val T)
-	startOb(owner O, id StateID, val T, selected bool) error
 }
 
 // WarningType represent type of warning for handler of observer
@@ -57,7 +63,8 @@ const (
 	ObWExitTimeout   WarningType = "exit_timeout"
 	ObWPickTimeout   WarningType = "pick_timeout"
 	ObWUpdateTimeout WarningType = "update_timeout"
-	ObWFrameSkip     WarningType = "frame_skiped"
+	ObWFrameTimeout  WarningType = "frame_timeout"
+	ObWFrameSkip     WarningType = "frame_skipped"
 	ObWMaxBlocking   WarningType = "max_hander_blocking"
 )
 
@@ -71,10 +78,19 @@ type ObWarning struct {
 // ObserveProtectedHook provide some hook function that run under mutex
 // protected. it use for hook event to do data copy or cancel followed handler.
 type ObserveProtectedHook[O any, T any] struct {
-	Enter  func(owner O, id StateID, val T) (newval T, skip bool)
-	Exit   func(owner O, id StateID, val T) (newval T, skip bool)
-	Pick   func(owner O, id StateID, val T) (newval T, skip bool)
-	Update func(owner O, id StateID, val T) (newval T, skip bool)
+	enter  func(owner O, id StateID, val T) (newval T, skip bool)
+	exit   func(owner O, id StateID, val T) (newval T, skip bool)
+	pick   func(owner O, id StateID, val T) (newval T, skip bool)
+	update func(owner O, id StateID, val T) (newval T, skip bool)
+}
+
+func NewObserveProtectedHook[O any, T any](
+	enter func(owner O, id StateID, val T) (newval T, skip bool),
+	exit func(owner O, id StateID, val T) (newval T, skip bool),
+	pick func(owner O, id StateID, val T) (newval T, skip bool),
+	update func(owner O, id StateID, val T) (newval T, skip bool),
+) *ObserveProtectedHook[O, T] {
+	return &ObserveProtectedHook[O, T]{enter, exit, pick, update}
 }
 
 // EventObserver represent a event-base observer. when a event occured will
@@ -88,7 +104,7 @@ type EventObserver[O any, T any] interface {
 
 // FramesObserver represent a time-based observer. it will trigger periodically.
 type FramesObserver[O any, T any] interface {
-	Frame(owner O, evt FrameEvent, id StateID, skiped int, val T)
+	Frame(owner O, evt FrameEvent, id StateID, skipped int64, val T)
 }
 
 // simpleEventOb is a simple EventObserver that create from ordinary function
@@ -116,11 +132,11 @@ func EventObserverFuncs[O any, T any](
 
 // simpleFrameOb is a simple FramesObserver that create from pure function
 type simpleFrameOb[O any, T any] func(
-	owner O, ev FrameEvent, stateID StateID, skiped int, val T)
+	owner O, ev FrameEvent, stateID StateID, skipped int64, val T)
 
 // FrameObserverFunc create FramesObserver from ordinary function
 func FrameObserverFunc[O any, T any](
-	frame func(owner O, ev FrameEvent, stateID StateID, skip int, val T),
+	frame func(owner O, ev FrameEvent, stateID StateID, skipped int64, val T),
 ) FramesObserver[O, T] {
 	return simpleFrameOb[O, T](frame)
 }
@@ -147,7 +163,8 @@ type eventObAgent[O any, T any] struct {
 
 // obTickable indecate a generic frameObAgent to adapt to common ticker
 type obTickable interface {
-	tick(time.Time)
+	tick(runHook func(), retHook func())
+	skipWarn()
 }
 
 // FrameObTicker join various time based observers and provide common time
@@ -158,19 +175,29 @@ type obTickable interface {
 type FrameObTicker interface {
 	// Stop stop the ticker
 	Stop()
+
 	// Reset restart or update ticker. use framerate to set new frame rate. if
 	// framerate be set to zero, previous config will be used.
 	Reset(framerate int) error
+
+	// SkippedFrame get count of skipped frames that on current frame executing
+	SkippedFrame() int64
+	// TotalSkipped get count of all skipped frames
+	TotalSkipped() int64
 
 	switchTo(ob obTickable)
 }
 
 // frameObTicker is a FrameObTicker implementation
 type frameObTicker struct {
-	mux    sync.RWMutex
-	ticker *time.Ticker
-	ob     obTickable
-	d      time.Duration
+	mux          sync.RWMutex
+	ticker       *time.Ticker
+	ob           obTickable
+	d            time.Duration
+	processing   int32 // atomic tag to mark  previous frame is inprogress
+	skipped      int64 // current skipped frames
+	totalskipped int64 // total skipped frames
+	skipWarnIf   func()
 }
 
 // CreateFrameObTicker create a new FrameObTicker.
@@ -188,15 +215,13 @@ func CreateFrameObTicker(framerate int) (FrameObTicker, error) {
 // frameObAgent implamented a time-based observer
 type frameObAgent[O any, T any] struct {
 	eventObCollector
-	//state       StateBinder[O, T]
-	hook        *ObserveProtectedHook[O, T]
-	obIf        FramesObserver[O, T]
-	val         T
-	ticker      FrameObTicker
-	fev         FrameEvent // current frame events
-	processing  int32      // atomic tag to mark  previous frame is inprogress
-	skiped      int        // current skiped frames
-	totalskiped int        // total skiped frames
+	evmux  sync.Mutex
+	hook   *ObserveProtectedHook[O, T]
+	obIf   FramesObserver[O, T]
+	owner  O
+	val    T
+	ticker FrameObTicker
+	fev    FrameEvent // current frame events
 }
 
 // initObCollector initialize a eventObCollector
@@ -221,14 +246,16 @@ func CreateEventObserver[O any, T any](
 	hook *ObserveProtectedHook[O, T],
 ) (Observer[O, T], error) {
 	if ob == nil {
-		return nil, errors.New("ob can not be nil")
+		return nil, ErrObRequired
 	}
-	obAgt := &eventObAgent{
+	if hook == nil {
+		hook = &ObserveProtectedHook[O, T]{} // use default hook
+	}
+	return &eventObAgent[O, T]{
 		eventObCollector: initObCollector(evTimeout, maxBlock),
 		hook:             hook,
 		obIf:             ob,
-	}
-	//return nil, nil
+	}, nil
 }
 
 // CreateFrameObserver create a time based observer
@@ -237,17 +264,17 @@ func CreateFrameObserver[O any, T any](
 	maxBlock uint32, hook *ObserveProtectedHook[O, T],
 ) (Observer[O, T], error) {
 	if ticker == nil {
-		return nil, errors.New("ticker can not be nil")
+		return nil, ErrObTickerRequired
 	}
-	obAgt := &frameObAgent{
+	if hook == nil {
+		hook = &ObserveProtectedHook[O, T]{} // use default hook
+	}
+	return &frameObAgent[O, T]{
 		eventObCollector: initObCollector(evTimeout, maxBlock),
 		hook:             hook,
 		obIf:             ob,
 		ticker:           ticker,
-		skiped:           0,
-		totalskiped:      0,
-	}
-	//return nil, nil
+	}, nil
 }
 
 // --------------- simple observer implemention ---------------
@@ -259,24 +286,24 @@ func (sob *simpleEventOb[O, T]) Enter(owner O, id StateID, val T) {
 }
 func (sob *simpleEventOb[O, T]) Exit(owner O, id StateID, val T) {
 	if sob.exit != nil {
-		sob.enter(owner, id, val)
+		sob.exit(owner, id, val)
 	}
 }
 func (sob *simpleEventOb[O, T]) Pick(owner O, id StateID, val T) {
 	if sob.pick != nil {
-		sob.enter(owner, id, val)
+		sob.pick(owner, id, val)
 	}
 }
 func (sob *simpleEventOb[O, T]) Update(owner O, id StateID, val T) {
 	if sob.update != nil {
-		sob.enter(owner, id, val)
+		sob.update(owner, id, val)
 	}
 }
 
 func (sob simpleFrameOb[O, T]) Frame(
-	owner O, evt FrameEvent, id StateID, skiped int, val T,
+	owner O, evt FrameEvent, id StateID, skipped int64, val T,
 ) {
-	sob(owner, evt, id, skiped, val)
+	sob(owner, evt, id, skipped, val)
 }
 
 // --------------- FrameObTicker impelementation ---------------
@@ -298,7 +325,7 @@ func (tk *frameObTicker) Reset(framerate int) error {
 	tk.mux.RLock()
 	defer tk.mux.RUnlock()
 	if tk.ticker == nil {
-		return errors.New("no observer bound")
+		return ErrObNoBound
 	}
 	if framerate != 0 {
 		tk.d = time.Duration(1.0/float32(framerate)*1000.0) * time.Millisecond
@@ -307,12 +334,23 @@ func (tk *frameObTicker) Reset(framerate int) error {
 	return nil
 }
 
+// SkippedFrame return current skipped frames
+func (tk *frameObTicker) SkippedFrame() int64 {
+	return atomic.LoadInt64(&tk.skipped)
+}
+
+// TotalSkipped return total skipped frames
+func (tk *frameObTicker) TotalSkipped() int64 {
+	return atomic.LoadInt64(&tk.totalskipped)
+}
+
 // switchTo change current active observer
 func (tk *frameObTicker) switchTo(ob obTickable) {
 	tk.mux.Lock()
 	defer tk.mux.Unlock()
 	tk.ob = ob
 	if tk.ticker == nil {
+		// start ticker on first switching
 		tk.ticker = time.NewTicker(tk.d)
 		go func() {
 			for {
@@ -320,7 +358,18 @@ func (tk *frameObTicker) switchTo(ob obTickable) {
 				func() {
 					tk.mux.RLock()
 					defer tk.mux.RUnlock()
-					ob.tick(time.Now())
+					if atomic.CompareAndSwapInt32(&tk.processing, 0, 1) {
+						tk.skipWarnIf = tk.ob.skipWarn
+						ob.tick(func() { // reset skipped frame on start processing event
+							atomic.StoreInt64(&tk.skipped, 0)
+						}, func() { // reset processing flag on finish processing event
+							atomic.StoreInt32(&tk.processing, 0)
+						})
+					} else if tk.skipWarnIf != nil { // skip frame
+						atomic.AddInt64(&tk.skipped, 1)
+						atomic.AddInt64(&tk.totalskipped, 1)
+						tk.skipWarnIf()
+					}
 				}()
 			}
 		}()
@@ -341,10 +390,10 @@ func (eoc *eventObCollector) warnOut(w WarningType) {
 	}
 }
 
-// startOb init event processor
-func (eoc *eventObCollector) startOb(stateID StateID) error {
+// initOb init event processor
+func (eoc *eventObCollector) initOb(stateID StateID) error {
 	if !atomic.CompareAndSwapInt32(&eoc.bindstat, 0, 1) {
-		return errors.New("observer already bound to a state")
+		return ErrObBeenBound
 	}
 	eoc.stateID = stateID
 	// start event thread
@@ -352,48 +401,238 @@ func (eoc *eventObCollector) startOb(stateID StateID) error {
 		for {
 			exec := <-eoc.evtCh
 			<-eoc.evtRt
-			if atomic.LoadInt32(&eoc.blockedCount) >= int32(eoc.maxBlock) {
-				eoc.warnOut(ObWMaxBlocking)
-				continue
-			}
-			go func() {
-				atomic.AddInt32(&eoc.blockedCount, 1)
-				defer atomic.AddInt32(&eoc.blockedCount, -1)
-				exec()
-			}()
+			atomic.AddInt32(&eoc.blockedCount, 1) //>>blockedCount
+			go func(xc func()) {
+				xc()
+			}(exec)
 		}
 	}()
+	eoc.evtRt <- struct{}{}
 	return nil
 }
 
 // packEvent pack a event with timeout watching
-func (eoc *eventObCollector) packEvent(wtimeout WarningType, f func()) func() {
+func (eoc *eventObCollector) packEvent(
+	wtimeout WarningType, f func(),
+	runHook func(), retHook func(timeout bool),
+) func() {
 	return func() {
+		timeout := false
 		defer func() {
+			if retHook != nil {
+				retHook(timeout)
+			}
 			eoc.evtRt <- struct{}{}
 		}()
+		if runHook != nil {
+			runHook()
+		}
 		if eoc.blockingTimeout != 0 {
 			retCh := make(chan struct{})
 			go func() {
 				f()
 				close(retCh)
+				atomic.AddInt32(&eoc.blockedCount, -1) //<<blockedCount
 			}()
 			select {
 			case <-retCh:
 				return
 			case <-time.After(eoc.blockingTimeout):
+				timeout = true
 				eoc.warnOut(wtimeout)
+				if atomic.LoadInt32(&eoc.blockedCount) >= int32(eoc.maxBlock) {
+					eoc.warnOut(ObWMaxBlocking)
+				} else {
+					return
+				}
+				// on max blocking, continue to execute until return
+				<-retCh
 			}
 		} else {
 			f()
+			atomic.AddInt32(&eoc.blockedCount, -1) //<<blockedCount
 		}
 	}
 }
 
+// Warning retrieve a channel to receive observer warning
 func (eoc *eventObCollector) Warning() <-chan ObWarning {
 	return eoc.warnChan
 }
 
 // --------------- EventObserver implementation ---------------
 
+func (eoa *eventObAgent[O, T]) startOb(
+	owner O, id StateID, val T, selected bool,
+) error {
+	return eoa.initOb(id)
+}
+
+func (eoa *eventObAgent[O, T]) enter(owner O, id StateID, val T) {
+	var newval T
+	skip := false
+	if eoa.hook != nil && eoa.hook.enter != nil {
+		newval, skip = eoa.hook.enter(owner, id, val)
+		if skip {
+			return
+		}
+	} else {
+		newval = val
+	}
+	fadv := eoa.packEvent(ObWEnterTimeout, func() {
+		eoa.obIf.Enter(owner, id, newval)
+	}, nil, nil)
+	eoa.evtCh <- fadv
+}
+
+func (eoa *eventObAgent[O, T]) exit(owner O, id StateID, val T) {
+	var newval T
+	skip := false
+	if eoa.hook != nil && eoa.hook.exit != nil {
+		newval, skip = eoa.hook.exit(owner, id, val)
+		if skip {
+			return
+		}
+	} else {
+		newval = val
+	}
+	fadv := eoa.packEvent(ObWExitTimeout, func() {
+		eoa.obIf.Exit(owner, id, newval)
+	}, nil, nil)
+	eoa.evtCh <- fadv
+}
+
+func (eoa *eventObAgent[O, T]) pick(owner O, id StateID, val T) {
+	var newval T
+	skip := false
+	if eoa.hook != nil && eoa.hook.pick != nil {
+		newval, skip = eoa.hook.pick(owner, id, val)
+		if skip {
+			return
+		}
+	} else {
+		newval = val
+	}
+	fadv := eoa.packEvent(ObWPickTimeout, func() {
+		eoa.obIf.Pick(owner, id, newval)
+	}, nil, nil)
+	eoa.evtCh <- fadv
+}
+
+func (eoa *eventObAgent[O, T]) update(owner O, id StateID, val T) {
+	var newval T
+	skip := false
+	if eoa.hook != nil && eoa.hook.update != nil {
+		newval, skip = eoa.hook.update(owner, id, val)
+		if skip {
+			return
+		}
+	} else {
+		newval = val
+	}
+	fadv := eoa.packEvent(ObWUpdateTimeout, func() {
+		eoa.obIf.Update(owner, id, newval)
+	}, nil, nil)
+	eoa.evtCh <- fadv
+}
+
 // --------------- FrameObserver implementation ---------------
+
+// skipWarn implement obTickable interface
+func (foa *frameObAgent[O, T]) skipWarn() {
+	foa.warnOut(ObWFrameSkip)
+}
+
+// tick implement obTickable interface
+func (foa *frameObAgent[O, T]) tick(runHook func(), retHook func()) {
+	fadv := foa.packEvent(ObWFrameTimeout, func() {
+		skipped := foa.ticker.SkippedFrame()
+		ev := foa.resetEv()
+		runHook()
+		foa.obIf.Frame(foa.owner, ev, foa.stateID, skipped, foa.val)
+	}, nil, func(timeout bool) {
+		retHook()
+	})
+	foa.evtCh <- fadv
+}
+
+// updateEv set a key-frame
+func (foa *frameObAgent[O, T]) updateEv(ev FrameEvent) {
+	foa.evmux.Lock()
+	defer foa.evmux.Unlock()
+	foa.fev = ev
+}
+
+// resetEv set a tansit frame
+func (foa *frameObAgent[O, T]) resetEv() FrameEvent {
+	foa.evmux.Lock()
+	defer foa.evmux.Unlock()
+	ev := foa.fev
+	foa.fev = FEvIdle
+	return ev
+}
+
+func (foa *frameObAgent[O, T]) startOb(
+	owner O, id StateID, val T, selected bool,
+) error {
+	if err := foa.initOb(id); err != nil {
+		return err
+	}
+	foa.owner = owner
+	if selected {
+		foa.updateEv(FEvEnter)
+		foa.ticker.switchTo(foa)
+	}
+	return nil
+}
+
+func (foa *frameObAgent[O, T]) enter(owner O, id StateID, val T) {
+	if foa.hook != nil && foa.hook.enter != nil {
+		val, skip := foa.hook.enter(owner, id, val)
+		if !skip {
+			foa.val = val
+		} else {
+			return
+		}
+	}
+	foa.owner = owner
+	foa.updateEv(FEvEnter)
+	foa.ticker.switchTo(foa)
+}
+
+func (foa *frameObAgent[O, T]) exit(owner O, id StateID, val T) {
+	if foa.hook != nil && foa.hook.exit != nil {
+		val, skip := foa.hook.exit(owner, id, val)
+		if !skip {
+			foa.val = val
+		} else {
+			return
+		}
+	}
+	foa.owner = owner
+}
+
+func (foa *frameObAgent[O, T]) pick(owner O, id StateID, val T) {
+	if foa.hook != nil && foa.hook.pick != nil {
+		val, skip := foa.hook.pick(owner, id, val)
+		if !skip {
+			foa.val = val
+		} else {
+			return
+		}
+	}
+	foa.owner = owner
+}
+
+func (foa *frameObAgent[O, T]) update(owner O, id StateID, val T) {
+	if foa.hook != nil && foa.hook.update != nil {
+		val, skip := foa.hook.update(owner, id, val)
+		if !skip {
+			foa.val = val
+		} else {
+			return
+		}
+	}
+	foa.owner = owner
+	foa.updateEv(FEvUpdate)
+}
