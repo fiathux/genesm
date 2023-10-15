@@ -178,12 +178,14 @@ type FrameObTicker interface {
 
 	// Reset restart or update ticker. use framerate to set new frame rate. if
 	// framerate be set to zero, previous config will be used.
-	Reset(framerate int) error
+	Reset(framerate float32) error
 
 	// SkippedFrame get count of skipped frames that on current frame executing
 	SkippedFrame() int64
 	// TotalSkipped get count of all skipped frames
 	TotalSkipped() int64
+	// TotalFrames get count of all frames
+	TotalFrames() int64
 
 	switchTo(ob obTickable)
 }
@@ -197,18 +199,19 @@ type frameObTicker struct {
 	processing   int32 // atomic tag to mark  previous frame is inprogress
 	skipped      int64 // current skipped frames
 	totalskipped int64 // total skipped frames
+	totalframe   int64 // total frames
 	skipWarnIf   func()
 }
 
 // CreateFrameObTicker create a new FrameObTicker.
 //
-// framerate must greater than 0 and less than 200.
-func CreateFrameObTicker(framerate int) (FrameObTicker, error) {
-	if framerate <= 0 || framerate > maxFrameRate {
+// framerate must greater than 0.01 and less than 200.
+func CreateFrameObTicker(framerate float32) (FrameObTicker, error) {
+	if framerate < 0.01 || framerate > float32(maxFrameRate) {
 		return nil, ErrObInvalidFrameRate
 	}
 	return &frameObTicker{
-		d: time.Duration(1.0/float32(framerate)*1000.0) * time.Millisecond,
+		d: time.Duration(1.0/framerate*1000.0) * time.Millisecond,
 	}, nil
 }
 
@@ -318,8 +321,8 @@ func (tk *frameObTicker) Stop() {
 }
 
 // Reset reset ticker
-func (tk *frameObTicker) Reset(framerate int) error {
-	if framerate < 0 || framerate > maxFrameRate {
+func (tk *frameObTicker) Reset(framerate float32) error {
+	if framerate < 0.01 || framerate > float32(maxFrameRate) {
 		return ErrObInvalidFrameRate
 	}
 	tk.mux.RLock()
@@ -328,7 +331,7 @@ func (tk *frameObTicker) Reset(framerate int) error {
 		return ErrObNoBound
 	}
 	if framerate != 0 {
-		tk.d = time.Duration(1.0/float32(framerate)*1000.0) * time.Millisecond
+		tk.d = time.Duration(1.0/framerate*1000.0) * time.Millisecond
 	}
 	tk.ticker.Reset(tk.d)
 	return nil
@@ -344,6 +347,11 @@ func (tk *frameObTicker) TotalSkipped() int64 {
 	return atomic.LoadInt64(&tk.totalskipped)
 }
 
+// TotalFrames return total frames
+func (tk *frameObTicker) TotalFrames() int64 {
+	return atomic.LoadInt64(&tk.totalframe)
+}
+
 // switchTo change current active observer
 func (tk *frameObTicker) switchTo(ob obTickable) {
 	tk.mux.Lock()
@@ -355,12 +363,13 @@ func (tk *frameObTicker) switchTo(ob obTickable) {
 		go func() {
 			for {
 				<-tk.ticker.C
+				atomic.AddInt64(&tk.totalframe, 1)
 				func() {
 					tk.mux.RLock()
 					defer tk.mux.RUnlock()
 					if atomic.CompareAndSwapInt32(&tk.processing, 0, 1) {
 						tk.skipWarnIf = tk.ob.skipWarn
-						ob.tick(func() { // reset skipped frame on start processing event
+						tk.ob.tick(func() { // reset skipped frame on start processing event
 							atomic.StoreInt64(&tk.skipped, 0)
 						}, func() { // reset processing flag on finish processing event
 							atomic.StoreInt32(&tk.processing, 0)
@@ -635,4 +644,22 @@ func (foa *frameObAgent[O, T]) update(owner O, id StateID, val T) {
 	}
 	foa.owner = owner
 	foa.updateEv(FEvUpdate)
+}
+
+// --------------- FrameEvent ---------------
+
+// String return string representation of FrameEvent
+func (fe FrameEvent) String() string {
+	switch fe {
+	case fEvFree:
+		return "Free"
+	case FEvIdle:
+		return "Idle"
+	case FEvEnter:
+		return "Enter"
+	case FEvUpdate:
+		return "Update"
+	default:
+		return "Unknown"
+	}
 }
