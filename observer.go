@@ -23,8 +23,6 @@ const maxFrameRate = 200
 // Obbserve errors
 var (
 	ErrObInvalidFrameRate = errors.New("invalid frame rate")
-	ErrObRequired         = errors.New("ob can not be nil")
-	ErrObTickerRequired   = errors.New("ticker can not be nil")
 	ErrObNoBound          = errors.New("no observer bound")
 	ErrObBeenBound        = errors.New("observer already bound to a state")
 )
@@ -78,6 +76,7 @@ type ObWarning struct {
 // ObserveProtectedHook provide some hook function that run under mutex
 // protected. it use for hook event to do data copy or cancel followed handler.
 type ObserveProtectedHook[O any, T any] struct {
+	init   func(owner O, id StateID, val T) (newval T)
 	enter  func(owner O, id StateID, val T) (newval T, skip bool)
 	exit   func(owner O, id StateID, val T) (newval T, skip bool)
 	pick   func(owner O, id StateID, val T) (newval T, skip bool)
@@ -85,12 +84,13 @@ type ObserveProtectedHook[O any, T any] struct {
 }
 
 func NewObserveProtectedHook[O any, T any](
+	init func(owner O, id StateID, val T) (newval T),
 	enter func(owner O, id StateID, val T) (newval T, skip bool),
 	exit func(owner O, id StateID, val T) (newval T, skip bool),
 	pick func(owner O, id StateID, val T) (newval T, skip bool),
 	update func(owner O, id StateID, val T) (newval T, skip bool),
 ) *ObserveProtectedHook[O, T] {
-	return &ObserveProtectedHook[O, T]{enter, exit, pick, update}
+	return &ObserveProtectedHook[O, T]{init, enter, exit, pick, update}
 }
 
 // EventObserver represent a event-base observer. when a event occured will
@@ -247,9 +247,9 @@ func initObCollector(evTimeout time.Duration, maxBlock uint32) eventObCollector 
 func CreateEventObserver[O any, T any](
 	ob EventObserver[O, T], evTimeout time.Duration, maxBlock uint32,
 	hook *ObserveProtectedHook[O, T],
-) (Observer[O, T], error) {
+) Observer[O, T] {
 	if ob == nil {
-		return nil, ErrObRequired
+		panic("ob can not be nil")
 	}
 	if hook == nil {
 		hook = &ObserveProtectedHook[O, T]{} // use default hook
@@ -258,16 +258,19 @@ func CreateEventObserver[O any, T any](
 		eventObCollector: initObCollector(evTimeout, maxBlock),
 		hook:             hook,
 		obIf:             ob,
-	}, nil
+	}
 }
 
 // CreateFrameObserver create a time based observer
 func CreateFrameObserver[O any, T any](
 	ticker FrameObTicker, ob FramesObserver[O, T], evTimeout time.Duration,
 	maxBlock uint32, hook *ObserveProtectedHook[O, T],
-) (Observer[O, T], error) {
+) Observer[O, T] {
 	if ticker == nil {
-		return nil, ErrObTickerRequired
+		panic("ticker can not be nil")
+	}
+	if ob == nil {
+		panic("ob can not be nil")
 	}
 	if hook == nil {
 		hook = &ObserveProtectedHook[O, T]{} // use default hook
@@ -277,7 +280,7 @@ func CreateFrameObserver[O any, T any](
 		hook:             hook,
 		obIf:             ob,
 		ticker:           ticker,
-	}, nil
+	}
 }
 
 // --------------- simple observer implemention ---------------
@@ -589,6 +592,11 @@ func (foa *frameObAgent[O, T]) startOb(
 	}
 	foa.owner = owner
 	if selected {
+		if foa.hook != nil && foa.hook.init != nil {
+			foa.val = foa.hook.init(owner, id, val)
+		} else {
+			foa.val = val
+		}
 		foa.updateEv(FEvEnter)
 		foa.ticker.switchTo(foa)
 	}
@@ -603,6 +611,8 @@ func (foa *frameObAgent[O, T]) enter(owner O, id StateID, val T) {
 		} else {
 			return
 		}
+	} else {
+		foa.val = val
 	}
 	foa.owner = owner
 	foa.updateEv(FEvEnter)
@@ -617,6 +627,8 @@ func (foa *frameObAgent[O, T]) exit(owner O, id StateID, val T) {
 		} else {
 			return
 		}
+	} else {
+		foa.val = val
 	}
 	foa.owner = owner
 }
@@ -629,6 +641,8 @@ func (foa *frameObAgent[O, T]) pick(owner O, id StateID, val T) {
 		} else {
 			return
 		}
+	} else {
+		foa.val = val
 	}
 	foa.owner = owner
 }
@@ -641,6 +655,8 @@ func (foa *frameObAgent[O, T]) update(owner O, id StateID, val T) {
 		} else {
 			return
 		}
+	} else {
+		foa.val = val
 	}
 	foa.owner = owner
 	foa.updateEv(FEvUpdate)

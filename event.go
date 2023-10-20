@@ -1,9 +1,14 @@
 package genesm
 
 // Event represent a event to change state on state matchine
-type Event[O any, A any, B any] interface {
-	SetHook(hook func(O, A, B) error)
+type Event interface {
 	Trigger() error
+}
+
+// EventX represent a event. which allow you add hook ahead the event trigger
+type EventX[O any, A any, B any] interface {
+	Event
+	SetHook(hook func(O, A, B) error)
 }
 
 // eventBind implement a Event. it will regist to StateMachine. then provide
@@ -23,7 +28,7 @@ type eventBind[O any, A any, B any] struct {
 // it return Event interface to let developer to trigger it.
 func RegEvent[O any, A any, B any](
 	sm *StateMachine[O], a StateBinder[O, A], b StateBinder[O, B],
-) Event[O, A, B] {
+) EventX[O, A, B] {
 	if a.Parent() != sm {
 		panic("state (a) is not be owned under specified StateMachine")
 	}

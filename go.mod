@@ -1,4 +1,4 @@
-module genesm
+module github.com/fiathux/genesm
 
 go 1.19
 

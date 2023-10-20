@@ -15,7 +15,7 @@ func TestEventObserver(t *testing.T) {
 		hookRet := []bool{true, true, true, true}
 		shiftF := func() {}
 
-		ob, err := CreateEventObserver(
+		ob := CreateEventObserver(
 			EventObserverFuncs(
 				func(owner string, id StateID, val int) {
 					shiftF()
@@ -36,6 +36,11 @@ func TestEventObserver(t *testing.T) {
 				},
 			), 100*time.Millisecond, 2,
 			NewObserveProtectedHook(
+				func(owner string, id StateID, val int) int {
+					t.Logf("Hooked Init on ID %d owner=%s, val=%d", id, owner, val)
+					hookRet[0] = false
+					return val * 10
+				},
 				func(owner string, id StateID, val int) (int, bool) {
 					t.Logf("Hooked Enter on ID %d owner=%s, val=%d", id, owner, val)
 					hookRet[0] = false
@@ -58,7 +63,6 @@ func TestEventObserver(t *testing.T) {
 				},
 			),
 		)
-		So(err, ShouldBeNil)
 		So(ob, ShouldNotBeNil)
 
 		owner := "XEventOwner"
@@ -104,7 +108,7 @@ func TestEventObserver(t *testing.T) {
 	// without hook
 	Convey("Event observer without hook test", t, func() {
 		eventRet := []bool{true, true, true, true}
-		ob, err := CreateEventObserver(
+		ob := CreateEventObserver(
 			EventObserverFuncs(
 				func(owner string, id StateID, val int) {
 					t.Logf("Observed event Enter on ID %d owner=%s, val=%d", id, owner, val)
@@ -123,7 +127,6 @@ func TestEventObserver(t *testing.T) {
 					eventRet[3] = false
 				},
 			), 0, 2, nil)
-		So(err, ShouldBeNil)
 		So(ob, ShouldNotBeNil)
 		owner := "XEventOwner-NoHook"
 		ob.startOb(owner, 2, 0, true)
@@ -151,7 +154,7 @@ func TestFrameObserver(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(tk, ShouldNotBeNil)
 
-		ob0, err := CreateFrameObserver(
+		ob0 := CreateFrameObserver(
 			tk,
 			FrameObserverFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
@@ -161,6 +164,11 @@ func TestFrameObserver(t *testing.T) {
 				frameRet[0]++
 			}), 100*time.Millisecond, 2,
 			NewObserveProtectedHook(
+				func(owner string, id StateID, val int) int {
+					t.Logf("Hooked Init on ID %d owner=%s, val=%d", id, owner, val)
+					hookRet[0] = false
+					return val * 10
+				},
 				func(owner string, id StateID, val int) (int, bool) {
 					t.Logf("Hooked Enter on ID %d owner=%s, val=%d", id, owner, val)
 					hookRet[0] = false
@@ -183,9 +191,8 @@ func TestFrameObserver(t *testing.T) {
 				},
 			),
 		)
-		So(err, ShouldBeNil)
 		So(ob0, ShouldNotBeNil)
-		ob1, err := CreateFrameObserver(
+		ob1 := CreateFrameObserver(
 			tk,
 			FrameObserverFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
@@ -194,9 +201,8 @@ func TestFrameObserver(t *testing.T) {
 					ev.String(), stateID, owner, skipped, val)
 				frameRet[1]++
 			}), 100*time.Millisecond, 2, nil)
-		So(err, ShouldBeNil)
 		So(ob1, ShouldNotBeNil)
-		ob2, err := CreateFrameObserver(
+		ob2 := CreateFrameObserver(
 			tk,
 			FrameObserverFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
@@ -206,7 +212,6 @@ func TestFrameObserver(t *testing.T) {
 					ev.String(), stateID, owner, skipped, val)
 				frameRet[2]++
 			}), 100*time.Millisecond, 2, nil)
-		So(err, ShouldBeNil)
 		So(ob2, ShouldNotBeNil)
 
 		owner := "XFrameOwner"
