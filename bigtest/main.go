@@ -18,10 +18,10 @@ var (
 	scGoto1 genesm.Event
 	// scGoto2 switch scene from root scene to scene 2
 	scGoto2 genesm.Event
-	// sc1Return switch scene 1 to root scene
-	sc1Return genesm.Event
-	// sc2Return switch scene 2 to root scene
-	sc2Return genesm.Event
+	// scGoto3 switch scene from scene 2 to scene 2x1
+	scGoto3 genesm.Event
+	// scReturn return to root scene
+	scReturn genesm.Event
 )
 
 var sceneMap = map[genesm.StateID]string{}
@@ -52,62 +52,11 @@ func frameDrawA(
 	}
 }
 
-// initMgr use state machine to initialize scene manager
-func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
-	// create state machine
-	sm := genesm.NewStateMachine(wd)
-
-	// bind scene as a state
-	scbind0 := genesm.RegState(sm, sc0)
-	scbind1 := genesm.RegState(sm, sc1)
-	scbind2 := genesm.RegState(sm, sc2)
-	sceneMap[scbind0.ID()] = "root"
-	sceneMap[scbind1.ID()] = "scene one"
-	sceneMap[scbind2.ID()] = "scene two"
-
-	// bind event
-	scGoto1 = genesm.RegEvent(sm, scbind0, scbind1)
-	scGoto2 = genesm.RegEvent(sm, scbind0, scbind2)
-	sc1Return = genesm.RegEvent(sm, scbind1, scbind0)
-	sc2Return = genesm.RegEvent(sm, scbind2, scbind0)
-
-	// create event handler
-	obHndA := genesm.EventObserverFuncs(
-		func(wd *Window, id genesm.StateID, val sceneA) {
-			fmt.Println("Type A Enter:", sceneMap[id])
-		},
-		func(wd *Window, id genesm.StateID, val sceneA) {
-			fmt.Println("Type A Exit:", sceneMap[id])
-		},
-		func(wd *Window, id genesm.StateID, val sceneA) {
-			fmt.Println("Type A SM Pick:", sceneMap[id])
-		}, nil,
-	)
-	obHndB := genesm.EventObserverFuncs(
-		func(wd *Window, id genesm.StateID, val sceneB) {
-			fmt.Println("Type B Enter:", sceneMap[id])
-		},
-		func(wd *Window, id genesm.StateID, val sceneB) {
-			fmt.Println("Type B Exit:", sceneMap[id])
-		},
-		func(wd *Window, id genesm.StateID, val sceneB) {
-			fmt.Println("Type B SM Pick:", sceneMap[id])
-		}, nil,
-	)
-
-	// bind event observer
-	scbind0.AddObserver(genesm.CreateEventObserver(obHndB, 0, 0, nil))
-	scbind1.AddObserver(genesm.CreateEventObserver(obHndA, 0, 0, nil))
-	scbind2.AddObserver(genesm.CreateEventObserver(obHndA, 0, 0, nil))
-
-	// create time-based observer
-	// time-based observer will draw graphic and update status for a actived scene
-
-	// create ticker
-	ticker, _ := genesm.CreateFrameObTicker(frameRate)
-
-	// create observer handler
-	sc0fr := genesm.FrameObserverFunc(func(
+// frameDrawB create a frame observer with sceneB update support
+func frameDrawB(
+	upd func(newsc sceneB),
+) func(*Window, genesm.FrameEvent, genesm.StateID, int64, sceneB) {
+	return func(
 		wd *Window, ev genesm.FrameEvent, stateID genesm.StateID,
 		skipped int64, sc sceneB,
 	) {
@@ -119,19 +68,99 @@ func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
 		// update scene
 		sc.a.o.Rotate(sc.a.trsDeg)
 		sc.b.o.Rotate(sc.b.trsDeg)
-		scbind0.Set(sc)
-	})
-	sc1fr := genesm.FrameObserverFunc(frameDrawA(func(s sceneA) {
+		upd(sc)
+	}
+}
+
+// initMgr use state machine to initialize scene manager
+func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
+	// create state machine
+	sm := genesm.NewStateMachine(wd)
+
+	// bind scene as a state
+	scbind0 := genesm.RegState(sm, scroot)
+	scbind1 := genesm.RegState(sm, sc1)
+	scbind2 := genesm.RegState(sm, sc2)
+	scbind3 := genesm.RegState(sm, sc2x1)
+	sceneMap[scbind0.ID()] = "root"
+	sceneMap[scbind1.ID()] = "scene one"
+	sceneMap[scbind2.ID()] = "scene two"
+	sceneMap[scbind3.ID()] = "scene two/sub"
+
+	// bind event
+	//      + <<<<<<<<<<<<<<<<<<< +
+	//      |                     |
+	//   >> + >> 0 + >> 1 >>>>>>> +
+	//             |              |
+	//             + >> 2 >> 3 >> +
+	scGoto1 = genesm.RegEvent(sm, scbind0, scbind1)
+	scGoto2 = genesm.RegEvent(sm, scbind0, scbind2)
+	scGoto3 = genesm.RegEvent(sm, scbind2, scbind3)
+	sc1Return := genesm.RegEvent(sm, scbind1, scbind0)
+	sc3Return := genesm.RegEvent(sm, scbind3, scbind0)
+	scReturn = genesm.GroupEvent(sc1Return, sc3Return)
+
+	// create event handler
+	obHndA := genesm.ObsEventFuncs(
+		func(wd *Window, id genesm.StateID, val sceneA) {
+			fmt.Println("Type A Enter:", sceneMap[id])
+		},
+		func(wd *Window, id genesm.StateID, val sceneA) {
+			fmt.Println("Type A Exit:", sceneMap[id])
+		},
+		func(wd *Window, id genesm.StateID, val sceneA) {
+			fmt.Println("Type A SM Pick:", sceneMap[id])
+		}, nil,
+	)
+	obHndB := genesm.ObsEventFuncs(
+		func(wd *Window, id genesm.StateID, val sceneB) {
+			fmt.Println("Type B Enter:", sceneMap[id])
+		},
+		func(wd *Window, id genesm.StateID, val sceneB) {
+			fmt.Println("Type B Exit:", sceneMap[id])
+		},
+		func(wd *Window, id genesm.StateID, val sceneB) {
+			fmt.Println("Type B SM Pick:", sceneMap[id])
+		}, nil,
+	)
+
+	// create controller for event observer
+	ctrEv := genesm.NewObsController(0, 0)
+
+	// bind event observer
+	scbind0.AddObserver(genesm.CreateEventObserver(ctrEv, obHndB, nil))
+	scbind1.AddObserver(genesm.CreateEventObserver(ctrEv, obHndA, nil))
+	scbind2.AddObserver(genesm.CreateEventObserver(ctrEv, obHndA, nil))
+	scbind3.AddObserver(genesm.CreateEventObserver(ctrEv, obHndB, nil))
+
+	// create time-based observer
+	// time-based observer will draw graphic and update status for a actived scene
+
+	// create controller for time-based observer
+	ctrFm := genesm.NewObsController(0, 0)
+
+	// create ticker
+	ticker, _ := genesm.CreateObsFrameTicker(frameRate)
+
+	// create frame handler
+	sc0fr := genesm.ObsFrameFunc(frameDrawB(func(s sceneB) {
+		scbind0.Set(s)
+	}))
+	sc1fr := genesm.ObsFrameFunc(frameDrawA(func(s sceneA) {
 		scbind1.Set(s)
 	}))
-	sc2fr := genesm.FrameObserverFunc(frameDrawA(func(s sceneA) {
+	sc2fr := genesm.ObsFrameFunc(frameDrawA(func(s sceneA) {
 		scbind2.Set(s)
+	}))
+	sc3fr := genesm.ObsFrameFunc(frameDrawB(func(s sceneB) {
+		scbind3.Set(s)
 	}))
 
 	// bind time-based observer
-	scbind0.AddObserver(genesm.CreateFrameObserver(ticker, sc0fr, 0, 0, nil))
-	scbind1.AddObserver(genesm.CreateFrameObserver(ticker, sc1fr, 0, 0, nil))
-	scbind2.AddObserver(genesm.CreateFrameObserver(ticker, sc2fr, 0, 0, nil))
+	scbind0.AddObserver(genesm.CreateFrameObserver(ctrFm, ticker, sc0fr, nil))
+	scbind1.AddObserver(genesm.CreateFrameObserver(ctrFm, ticker, sc1fr, nil))
+	scbind2.AddObserver(genesm.CreateFrameObserver(ctrFm, ticker, sc2fr, nil))
+	scbind3.AddObserver(genesm.CreateFrameObserver(ctrFm, ticker, sc3fr, nil))
 
 	ret := make(chan struct{})
 
@@ -169,9 +198,10 @@ func main() {
 							scGoto1.Trigger()
 						case sdl.K_2:
 							scGoto2.Trigger()
+						case sdl.K_3:
+							scGoto3.Trigger()
 						case sdl.K_RETURN:
-							sc1Return.Trigger()
-							sc2Return.Trigger()
+							scReturn.Trigger()
 						}
 					}
 				case *sdl.QuitEvent:

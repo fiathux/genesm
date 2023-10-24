@@ -15,8 +15,11 @@ func TestEventObserver(t *testing.T) {
 		hookRet := []bool{true, true, true, true}
 		shiftF := func() {}
 
+		ctr := NewObsController(100*time.Millisecond, 2)
+
 		ob := CreateEventObserver(
-			EventObserverFuncs(
+			ctr,
+			ObsEventFuncs(
 				func(owner string, id StateID, val int) {
 					shiftF()
 					t.Logf("Observed event Enter on ID %d owner=%s, val=%d", id, owner, val)
@@ -34,7 +37,7 @@ func TestEventObserver(t *testing.T) {
 					t.Logf("Observed event Update on ID %d owner=%s, val=%d", id, owner, val)
 					eventRet[3] = false
 				},
-			), 100*time.Millisecond, 2,
+			),
 			NewObserveProtectedHook(
 				func(owner string, id StateID, val int) int {
 					t.Logf("Hooked Init on ID %d owner=%s, val=%d", id, owner, val)
@@ -87,7 +90,7 @@ func TestEventObserver(t *testing.T) {
 			wrCount := 0
 			go func() {
 				for {
-					w := <-ob.Warning()
+					w := <-ctr.Warning()
 					t.Log("Got warning from observer:", w)
 					wrCount++
 				}
@@ -109,7 +112,8 @@ func TestEventObserver(t *testing.T) {
 	Convey("Event observer without hook test", t, func() {
 		eventRet := []bool{true, true, true, true}
 		ob := CreateEventObserver(
-			EventObserverFuncs(
+			nil,
+			ObsEventFuncs(
 				func(owner string, id StateID, val int) {
 					t.Logf("Observed event Enter on ID %d owner=%s, val=%d", id, owner, val)
 					eventRet[0] = false
@@ -126,7 +130,7 @@ func TestEventObserver(t *testing.T) {
 					t.Logf("Observed event Update on ID %d owner=%s, val=%d", id, owner, val)
 					eventRet[3] = false
 				},
-			), 0, 2, nil)
+			), nil)
 		So(ob, ShouldNotBeNil)
 		owner := "XEventOwner-NoHook"
 		ob.startOb(owner, 2, 0, true)
@@ -150,19 +154,21 @@ func TestFrameObserver(t *testing.T) {
 		frameRet := []int{0, 0, 0}
 		shiftF := func() {}
 
-		tk, err := CreateFrameObTicker(10)
+		tk, err := CreateObsFrameTicker(10)
 		So(err, ShouldBeNil)
 		So(tk, ShouldNotBeNil)
 
+		ctr := NewObsController(100*time.Millisecond, 2)
+
 		ob0 := CreateFrameObserver(
-			tk,
-			FrameObserverFunc(func(
+			ctr, tk,
+			ObsFrameFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
 			) {
 				t.Logf("Observed frame event %s on ID %d owner=%s, skipped=%d, val=%d",
 					ev.String(), stateID, owner, skipped, val)
 				frameRet[0]++
-			}), 100*time.Millisecond, 2,
+			}),
 			NewObserveProtectedHook(
 				func(owner string, id StateID, val int) int {
 					t.Logf("Hooked Init on ID %d owner=%s, val=%d", id, owner, val)
@@ -193,25 +199,25 @@ func TestFrameObserver(t *testing.T) {
 		)
 		So(ob0, ShouldNotBeNil)
 		ob1 := CreateFrameObserver(
-			tk,
-			FrameObserverFunc(func(
+			ctr, tk,
+			ObsFrameFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
 			) {
 				t.Logf("Observed frame event %s on ID %d owner=%s, skipped=%d, val=%d",
 					ev.String(), stateID, owner, skipped, val)
 				frameRet[1]++
-			}), 100*time.Millisecond, 2, nil)
+			}), nil)
 		So(ob1, ShouldNotBeNil)
 		ob2 := CreateFrameObserver(
-			tk,
-			FrameObserverFunc(func(
+			ctr, tk,
+			ObsFrameFunc(func(
 				owner string, ev FrameEvent, stateID StateID, skipped int64, val int,
 			) {
 				shiftF()
 				t.Logf("Observed frame event %s on ID %d owner=%s, skipped=%d, val=%d",
 					ev.String(), stateID, owner, skipped, val)
 				frameRet[2]++
-			}), 100*time.Millisecond, 2, nil)
+			}), nil)
 		So(ob2, ShouldNotBeNil)
 
 		owner := "XFrameOwner"
@@ -254,7 +260,7 @@ func TestFrameObserver(t *testing.T) {
 			warnUnknown := false
 			go func() {
 				for {
-					w := <-ob2.Warning()
+					w := <-ctr.Warning()
 					t.Logf("Frame Ob2 warning %v", w)
 					switch w.Type {
 					case ObWFrameSkip:
@@ -272,11 +278,13 @@ func TestFrameObserver(t *testing.T) {
 				time.Sleep(500 * time.Millisecond)
 			}
 			time.Sleep(2100 * time.Millisecond)
+			So(tk.SkippedFrames(), ShouldBeGreaterThan, 0)
+			shiftF = func() {}
 			So(warnBlock, ShouldBeTrue)
 			So(warnSkip, ShouldBeTrue)
 			So(warnTimeout, ShouldBeTrue)
 			So(warnUnknown, ShouldBeFalse)
-			shiftF = func() {}
+			So(tk.TotalSkipped(), ShouldBeGreaterThan, 0)
 		})
 
 		Convey("Test ticker modify", func() {

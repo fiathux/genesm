@@ -1,11 +1,20 @@
 package genesm
 
+import "errors"
+
+// Event errors
+var (
+	ErrEvEmptyGroup   = errors.New("no member in event group")
+	ErrEvGroupFailure = errors.New("all events are failure")
+)
+
 // Event represent a event to change state on state matchine
 type Event interface {
 	Trigger() error
 }
 
-// EventX represent a event. which allow you add hook ahead the event trigger
+// EventX represent a event that similar as Event. but which allow you add hook
+// ahead the event trigger
 type EventX[O any, A any, B any] interface {
 	Event
 	SetHook(hook func(O, A, B) error)
@@ -20,6 +29,9 @@ type eventBind[O any, A any, B any] struct {
 
 	hook func(O, A, B) error
 }
+
+// eventGroup group several Event objects
+type eventGroup []Event
 
 // RegEvent regist an event rule to state machine
 //
@@ -42,6 +54,12 @@ func RegEvent[O any, A any, B any](
 	}
 }
 
+// GroupEvent group several Event objects as a new Event. trigger this group is
+// equal to try in-order trigger each event until got a succeed
+func GroupEvent(evs ...Event) Event {
+	return eventGroup(evs)
+}
+
 // SetHook set a hook function that allow developer check contain data of each
 // State. if an error is be returned, event will be canceled as well.
 func (eb *eventBind[O, A, B]) SetHook(
@@ -50,7 +68,7 @@ func (eb *eventBind[O, A, B]) SetHook(
 	eb.hook = hook
 }
 
-// Trigger use to trigger event
+// Trigger trigger the event
 func (eb *eventBind[O, A, B]) Trigger() (rerr error) {
 	eb.sm.transform(func(curID StateID) StateID {
 		if curID != eb.a.ID() {
@@ -70,4 +88,17 @@ func (eb *eventBind[O, A, B]) Trigger() (rerr error) {
 		return eb.b.ID()
 	})
 	return
+}
+
+// Trigger try in-order trigger each event
+func (eg eventGroup) Trigger() (rerr error) {
+	if len(eg) == 0 {
+		return ErrEvEmptyGroup
+	}
+	for _, ev := range eg {
+		if err := ev.Trigger(); err == nil {
+			return nil
+		}
+	}
+	return ErrEvGroupFailure
 }

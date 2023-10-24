@@ -1,2 +1,2 @@
-// Package genesm implemented a general state machine
+// Package genesm implemented a general finite state machine (FSM)
 package genesm

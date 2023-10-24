@@ -12,7 +12,8 @@ type sceneB struct {
 	b sceneA
 }
 
-var sc0 = sceneB{
+// root scene
+var scroot = sceneB{
 	a: sceneA{
 		o: object{
 			p: []plan{
@@ -39,7 +40,7 @@ var sc0 = sceneB{
 					vect{-100, -100, 100},
 				},
 			},
-			lineWidth: 2,
+			lineWidth: 3,
 			color:     colorRGB{0.2, 0.5, 0.9},
 			zdepth:    600,
 		},
@@ -76,7 +77,7 @@ var sc0 = sceneB{
 				},
 			},
 			lineWidth: 2,
-			color:     colorRGB{0.2, 0.5, 0.9},
+			color:     colorRGB{0.4, 0.8, 0.9},
 			zdepth:    600,
 		},
 		trsDeg: vect{
@@ -86,6 +87,7 @@ var sc0 = sceneB{
 	},
 }
 
+// scene 1
 var sc1 = sceneA{
 	o: object{
 		p: []plan{
@@ -128,6 +130,7 @@ var sc1 = sceneA{
 	},
 }
 
+// scene 2
 var sc2 = sceneA{
 	o: object{
 		p: []plan{
@@ -154,5 +157,50 @@ var sc2 = sceneA{
 	trsDeg: vect{
 		y: -0.002 * math.Pi,
 		z: 0.001 * math.Pi,
+	},
+}
+
+// scene 2.1
+var sc2x1 = sceneB{
+	a: sceneA{
+		o: object{
+			p: []plan{
+				plan{
+					vect{0, 100, 0},
+					vect{100, 42.26497308103743, 0},
+					vect{100, -42.26497308103743, 0},
+					vect{0, -100, 0},
+					vect{-100, -42.26497308103743, 0},
+					vect{-100, 42.26497308103743, 0},
+				},
+			},
+			lineWidth: 2,
+			color:     colorRGB{0.9, 0.9, 0.3},
+			zdepth:    600,
+		},
+		trsDeg: vect{
+			y: 0.002 * math.Pi,
+		},
+	},
+	b: sceneA{
+		o: object{
+			p: []plan{
+				plan{
+					vect{0, 50, 0},
+					vect{50, 21.132486540518716, 0},
+					vect{50, -21.132486540518716, 0},
+					vect{0, -50, 0},
+					vect{-50, -21.132486540518716, 0},
+					vect{-50, 21.132486540518716, 0},
+				},
+			},
+			lineWidth: 3,
+			color:     colorRGB{0.8, 0.8, 0.6},
+			zdepth:    600,
+		},
+		trsDeg: vect{
+			y: -0.006 * math.Pi,
+			z: -0.003 * math.Pi,
+		},
 	},
 }

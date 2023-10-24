@@ -20,9 +20,9 @@ type StateID int
 
 const STIDInvalid StateID = -1
 
-// A StateMachine is use for manage restricted State objects.
+// A StateMachine is use for manage DFA State objects.
 //
-// A restricted State object is be global unique. which regist into
+// A DFA State object should be global unique. which be register and managed by
 // StateMachine.
 //
 // StateMachine will select a State object to current State. once some action

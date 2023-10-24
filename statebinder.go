@@ -14,15 +14,14 @@ type stateAgent[O any] interface {
 	onPick(owner O)
 }
 
-// StateBinder is a management interface. which represent a restricted State
-// that managed by StateMachine.
+// StateBinder is a management interface. which represent a DFA State that
+// managed by StateMachine.
 //
 // generally StateBinder is global unique object. it have a State ID that
 // assigned by StateMachine.
 //
-// A restricted State can be any type. also it could contain some unrestricted
-// State. unrestricted State are managed by StateBinder it self. both
-// restricted part and unrestricted part could be watching by observer
+// Contained value can be any type. use Get/Set method to retrieve or update it.
+// this operation could be watching by observer
 type StateBinder[O any, T any] interface {
 	ID() StateID
 	Parent() *StateMachine[O]
@@ -53,12 +52,11 @@ type stateBindImp[O any, T any] struct {
 // State can be any thing. once it registed which will managed by state
 // machine.
 //
-// As a restricted State, developer use StateMachine to manage it. contained
-// data are not be care in this procedure.
+// As a DFA State, developer use StateMachine to manage it. contained data are
+// not be care in this procedure.
 //
-// As a unrestricted State. developer use StateBinder to manage it. contained
-// data need to update via StateBinder. once contain data is been updated, an
-// Update event will be trigger on observer
+// As a variable. StateBinder managed own values. which provide Update method
+// to safely update value. also Update event will be trigger on observer
 func RegState[O any, T any](sm *StateMachine[O], state T) StateBinder[O, T] {
 	ret := &stateBindImp[O, T]{
 		parent:     sm,
