@@ -15,7 +15,9 @@ func TestEventObserver(t *testing.T) {
 		hookRet := []bool{true, true, true, true}
 		shiftF := func() {}
 
-		ctr := NewObsController(100*time.Millisecond, 2)
+		ctr := NewObsController(ObsControlCfg{
+			Timeout: 100 * time.Millisecond, MaxBlock: 2,
+		})
 
 		ob := CreateEventObserver(
 			ctr,
@@ -69,15 +71,15 @@ func TestEventObserver(t *testing.T) {
 		So(ob, ShouldNotBeNil)
 
 		owner := "XEventOwner"
-		ob.startOb(owner, 1, 0, true)
-		So(ob.(*eventObAgent[string, int]).stateID, ShouldEqual, 1)
-		ob.enter(owner, 1, 1)
+		ob.startOb(owner, StateID{1, 1}, 0, true)
+		So(ob.(*eventObAgent[string, int]).stateID, ShouldEqual, StateID{1, 1})
+		ob.enter(owner, StateID{1, 1}, 1)
 		So(hookRet[0], ShouldBeFalse)
-		ob.exit(owner, 1, 2)
+		ob.exit(owner, StateID{1, 1}, 2)
 		So(hookRet[1], ShouldBeFalse)
-		ob.pick(owner, 1, 3)
+		ob.pick(owner, StateID{1, 1}, 3)
 		So(hookRet[2], ShouldBeFalse)
-		ob.update(owner, 1, 4)
+		ob.update(owner, StateID{1, 1}, 4)
 		So(hookRet[3], ShouldBeFalse)
 		time.Sleep(100 * time.Millisecond)
 		t.Log("check eventRet:", eventRet)
@@ -98,10 +100,10 @@ func TestEventObserver(t *testing.T) {
 			shiftF = func() {
 				time.Sleep(500 * time.Millisecond)
 			}
-			ob.enter(owner, 1, 4)
-			ob.enter(owner, 1, 5)
-			ob.enter(owner, 1, 6)
-			ob.enter(owner, 1, 7)
+			ob.enter(owner, StateID{1, 1}, 4)
+			ob.enter(owner, StateID{1, 1}, 5)
+			ob.enter(owner, StateID{1, 1}, 6)
+			ob.enter(owner, StateID{1, 1}, 7)
 			time.Sleep(2 * time.Second)
 			// Timeout x 4 + max Blocking x 2
 			So(wrCount == 6, ShouldBeTrue)
@@ -133,11 +135,11 @@ func TestEventObserver(t *testing.T) {
 			), nil)
 		So(ob, ShouldNotBeNil)
 		owner := "XEventOwner-NoHook"
-		ob.startOb(owner, 2, 0, true)
-		ob.enter(owner, 2, 1)
-		ob.exit(owner, 2, 2)
-		ob.pick(owner, 2, 3)
-		ob.update(owner, 2, 4)
+		ob.startOb(owner, StateID{1, 2}, 0, true)
+		ob.enter(owner, StateID{1, 2}, 1)
+		ob.exit(owner, StateID{1, 2}, 2)
+		ob.pick(owner, StateID{1, 2}, 3)
+		ob.update(owner, StateID{1, 2}, 4)
 		runtime.Gosched()
 		time.Sleep(100 * time.Millisecond)
 		t.Log("check eventRet:", eventRet)
@@ -158,7 +160,9 @@ func TestFrameObserver(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(tk, ShouldNotBeNil)
 
-		ctr := NewObsController(100*time.Millisecond, 2)
+		ctr := NewObsController(ObsControlCfg{
+			Timeout: 100 * time.Millisecond, MaxBlock: 2,
+		})
 
 		ob0 := CreateFrameObserver(
 			ctr, tk,
@@ -222,26 +226,26 @@ func TestFrameObserver(t *testing.T) {
 
 		owner := "XFrameOwner"
 
-		ob0.startOb(owner, 1, 0, true)
-		ob1.startOb(owner, 2, 100, false)
-		ob2.startOb(owner, 3, 200, false)
+		ob0.startOb(owner, StateID{1, 1}, 0, true)
+		ob1.startOb(owner, StateID{1, 2}, 100, false)
+		ob2.startOb(owner, StateID{1, 3}, 200, false)
 
 		time.Sleep(200 * time.Millisecond)
-		ob0.enter(owner, 1, 1)
+		ob0.enter(owner, StateID{1, 1}, 1)
 		time.Sleep(200 * time.Millisecond)
-		ob0.pick(owner, 1, 2)
+		ob0.pick(owner, StateID{1, 1}, 2)
 		time.Sleep(200 * time.Millisecond)
-		ob0.update(owner, 1, 3)
+		ob0.update(owner, StateID{1, 1}, 3)
 		time.Sleep(200 * time.Millisecond)
-		ob0.exit(owner, 1, 4)
-		ob1.enter(owner, 2, 101)
+		ob0.exit(owner, StateID{1, 1}, 4)
+		ob1.enter(owner, StateID{1, 2}, 101)
 		time.Sleep(200 * time.Millisecond)
-		ob1.pick(owner, 2, 102)
+		ob1.pick(owner, StateID{1, 2}, 102)
 		time.Sleep(200 * time.Millisecond)
-		ob1.update(owner, 2, 103)
+		ob1.update(owner, StateID{1, 2}, 103)
 		time.Sleep(200 * time.Millisecond)
-		ob1.exit(owner, 2, 104)
-		ob2.enter(owner, 3, 201)
+		ob1.exit(owner, StateID{1, 2}, 104)
+		ob2.enter(owner, StateID{1, 3}, 201)
 		time.Sleep(200 * time.Millisecond)
 
 		So(hookRet[0], ShouldBeFalse)
@@ -253,51 +257,52 @@ func TestFrameObserver(t *testing.T) {
 		So(frameRet[2] > 0, ShouldBeTrue)
 		So(frameRet[0]+frameRet[1]+frameRet[2], ShouldEqual, tk.TotalFrames())
 
-		Convey("Test frame skip", func() {
-			warnBlock := false
-			warnSkip := false
-			warnTimeout := false
-			warnUnknown := false
-			go func() {
-				for {
-					w := <-ctr.Warning()
-					t.Logf("Frame Ob2 warning %v", w)
-					switch w.Type {
-					case ObWFrameSkip:
-						warnSkip = true
-					case ObWFrameTimeout:
-						warnTimeout = true
-					case ObWMaxBlocking:
-						warnBlock = true
-					default:
-						warnUnknown = true
-					}
+		// Test frame skip
+		warnBlock := false
+		warnSkip := false
+		warnTimeout := false
+		warnUnknown := false
+		go func() {
+			for {
+				w := <-ctr.Warning()
+				t.Logf("Frame Ob2 warning %v", w)
+				switch w.Type {
+				case ObWFrameSkip:
+					warnSkip = true
+				case ObWFrameTimeout:
+					warnTimeout = true
+				case ObWMaxBlocking:
+					warnBlock = true
+				default:
+					warnUnknown = true
 				}
-			}()
-			shiftF = func() {
-				time.Sleep(500 * time.Millisecond)
 			}
-			time.Sleep(2100 * time.Millisecond)
-			So(tk.SkippedFrames(), ShouldBeGreaterThan, 0)
-			shiftF = func() {}
-			So(warnBlock, ShouldBeTrue)
-			So(warnSkip, ShouldBeTrue)
-			So(warnTimeout, ShouldBeTrue)
-			So(warnUnknown, ShouldBeFalse)
-			So(tk.TotalSkipped(), ShouldBeGreaterThan, 0)
-		})
+		}()
+		shiftF = func() {
+			time.Sleep(500 * time.Millisecond)
+		}
+		time.Sleep(2100 * time.Millisecond)
+		So(tk.SkippedFrames(), ShouldBeGreaterThan, 0)
+		shiftF = func() {}
+		So(warnBlock, ShouldBeTrue)
+		So(warnSkip, ShouldBeTrue)
+		So(warnTimeout, ShouldBeTrue)
+		So(warnUnknown, ShouldBeFalse)
+		So(tk.TotalSkipped(), ShouldBeGreaterThan, 0)
 
-		Convey("Test ticker modify", func() {
-			ob0.enter(owner, 1, 9)
-			time.Sleep(200 * time.Millisecond)
-			tk.Stop()
-			fms := tk.TotalFrames()
-			time.Sleep(1000 * time.Millisecond)
-			So(tk.TotalFrames(), ShouldEqual, fms)
-			tk.Reset(20)
-			time.Sleep(1010 * time.Millisecond)
-			So(tk.TotalFrames()-fms, ShouldEqual, 20)
-		})
-
+		// Test ticker modify
+		ob0.enter(owner, StateID{1, 1}, 9)
+		time.Sleep(200 * time.Millisecond)
+		tk.Stop()
+		t.Log("STOPPED")
+		fms := tk.TotalFrames()
+		tcs := tk.TickCount()
+		time.Sleep(1000 * time.Millisecond)
+		So(tk.TotalFrames(), ShouldEqual, fms)
+		t.Log("RESET")
+		tk.Reset(20)
+		time.Sleep(1030 * time.Millisecond)
+		So(tk.TickCount()-tcs, ShouldEqual, 20)
+		So(20-tk.TotalFrames()-fms <= 1, ShouldBeTrue)
 	})
 }

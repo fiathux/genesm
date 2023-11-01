@@ -60,6 +60,7 @@ func frameDrawB(
 		wd *Window, ev genesm.FrameEvent, stateID genesm.StateID,
 		skipped int64, sc sceneB,
 	) {
+		ts := time.Now().UnixNano()
 		wd.Clean()
 		wd.Draw(func(cs *cairo.Surface) {
 			sc.a.o.Draw(cs, WXCenter, WYCenter)
@@ -69,6 +70,10 @@ func frameDrawB(
 		sc.a.o.Rotate(sc.a.trsDeg)
 		sc.b.o.Rotate(sc.b.trsDeg)
 		upd(sc)
+		tdiff := time.Now().UnixNano() - ts
+		if tdiff > 5000000 {
+			fmt.Println("rander time is too long:", tdiff)
+		}
 	}
 }
 
@@ -125,7 +130,7 @@ func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
 	)
 
 	// create controller for event observer
-	ctrEv := genesm.NewObsController(0, 0)
+	ctrEv := genesm.NewObsController(genesm.ObsControlCfg{})
 
 	// bind event observer
 	scbind0.AddObserver(genesm.CreateEventObserver(ctrEv, obHndB, nil))
@@ -137,7 +142,7 @@ func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
 	// time-based observer will draw graphic and update status for a actived scene
 
 	// create controller for time-based observer
-	ctrFm := genesm.NewObsController(0, 0)
+	ctrFm := genesm.NewObsController(genesm.ObsControlCfg{})
 
 	// create ticker
 	ticker, _ := genesm.CreateObsFrameTicker(frameRate)
@@ -155,6 +160,12 @@ func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
 	sc3fr := genesm.ObsFrameFunc(frameDrawB(func(s sceneB) {
 		scbind3.Set(s)
 	}))
+
+	go func() {
+		for {
+			fmt.Println(<-ctrFm.Warning())
+		}
+	}()
 
 	// bind time-based observer
 	scbind0.AddObserver(genesm.CreateFrameObserver(ctrFm, ticker, sc0fr, nil))

@@ -65,7 +65,7 @@ func RegState[O any, T any](sm *StateMachine[O], state T) StateBinder[O, T] {
 	}
 	sm.regState(func(id StateID) stateAgent[O] {
 		ret.id = id
-		if id == 0 { // add for first state into state machine
+		if id.RegSerial == 0 { // add for first state into state machine
 			ret.selected = true
 		}
 		return ret

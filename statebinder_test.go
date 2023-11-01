@@ -32,7 +32,7 @@ func TestStateBinder(t *testing.T) {
 	Convey("State binder test", t, func() {
 		// create state machine
 		sm := NewStateMachine("ownerXYZ")
-		So(sm.StateID(), ShouldEqual, STIDInvalid)
+		So(sm.StateID(), ShouldEqual, STIDInvalid())
 		So(sm.PickState(), ShouldNotBeNil)
 
 		// regist state

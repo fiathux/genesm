@@ -157,6 +157,34 @@ type ObsController interface {
 	warn(WarningType, StateID)
 }
 
+// ObsControlCfg is config of ObsController
+//
+// Timeout is a timeout for waiting a handler to execute. if a handler
+// blocked more than this time, it will be report as a warning. handler will
+// be continue blocked until it be executed, but next event will be handled.
+//
+// if Timeout is zero, handler will be blocked until it return.
+//
+// MaxBlock is a max count of handler that can be blocked. if count of blocked
+// handler reach this value, it will be report as a warning. in this case nex
+// event will not be handled, until a previous handler be released.
+//
+// Minimum value of maxBlock is 1. pass zero to maxBlock will be treat as 1.
+//
+// LenEventQueue is size of event execute queue. if a handler of event is
+// blocked, next event will waiting in the queue until previous handler return
+// or timeout. if queue is full, whole event chain under state machine will be
+// blocked. default value of LenEventQueue is 5.
+//
+// LenWarnChan is length of channel to report warning. default value is 3. if
+// channel is full, the message of warning will be lost.
+type ObsControlCfg struct {
+	Timeout       time.Duration
+	MaxBlock      uint32
+	LenEventQueue uint32
+	LenWarnChan   uint32
+}
+
 // obsControllerImpl is a implementation of ObsController
 type obsControllerImpl struct {
 	evtCh           chan func()
@@ -168,28 +196,22 @@ type obsControllerImpl struct {
 }
 
 // NewObsController create a new ObsController
-//
-// evTimeout is a timeout for waiting a handler to execute. if a handler
-// blocked more than this time, it will be report as a warning. handler will
-// be continue blocked until it be executed, but next event will be handled.
-//
-// if evTimeout is zero, handler will be blocked until it return.
-//
-// maxBlock is a max count of handler that can be blocked. if count of blocked
-// handler reach this value, it will be report as a warning. in this case nex
-// event will not be handled, until a previous handler be released.
-//
-// Minimum value of maxBlock is 1. pass zero to maxBlock will be treat as 1.
-func NewObsController(evTimeout time.Duration, maxBlock uint32) ObsController {
-	if maxBlock == 0 {
-		maxBlock = 1
+func NewObsController(cfg ObsControlCfg) ObsController {
+	if cfg.MaxBlock == 0 {
+		cfg.MaxBlock = 1
+	}
+	if cfg.LenEventQueue == 0 {
+		cfg.LenEventQueue = 5
+	}
+	if cfg.LenWarnChan == 0 {
+		cfg.LenWarnChan = 3
 	}
 	ret := &obsControllerImpl{
-		evtCh:           make(chan func(), 20),
+		evtCh:           make(chan func(), cfg.LenEventQueue),
 		evtRt:           make(chan struct{}, 1),
-		blockingTimeout: evTimeout,
-		maxBlock:        maxBlock,
-		warnChan:        make(chan ObWarning, 5),
+		blockingTimeout: cfg.Timeout,
+		maxBlock:        cfg.MaxBlock,
+		warnChan:        make(chan ObWarning, cfg.LenWarnChan),
 	}
 	ret.init()
 	return ret
@@ -233,23 +255,25 @@ type ObsFrameTicker interface {
 	SkippedFrames() int64
 	// TotalSkipped get count of all skipped frames
 	TotalSkipped() int64
-	// TotalFrames get count of all frames
+	// TotalFrames get count of executed frames
 	TotalFrames() int64
+	// TotalFrames get count of ticks after ticker been created
+	TickCount() int64
 
-	switchTo(ob obTickable)
+	switchTo(ob obTickable, stateID StateID)
 }
 
 // obsFrameTicker is a ObsFrameTicker implementation
 type obsFrameTicker struct {
 	mux          sync.RWMutex
 	ticker       *time.Ticker
-	ob           obTickable
+	obs          map[uint32]obTickable
 	d            time.Duration
 	processing   int32 // atomic tag to mark  previous frame is inprogress
 	skipped      int64 // current skipped frames
 	totalskipped int64 // total skipped frames
-	totalframe   int64 // total frames
-	skipWarnIf   func()
+	totalframe   int64 // total executed frames
+	tickcount    int64 // count of ticks
 }
 
 // CreateObsFrameTicker create a new ObsFrameTicker.
@@ -260,7 +284,8 @@ func CreateObsFrameTicker(framerate float32) (ObsFrameTicker, error) {
 		return nil, ErrObInvalidFrameRate
 	}
 	return &obsFrameTicker{
-		d: time.Duration(1.0/framerate*1000.0) * time.Millisecond,
+		obs: make(map[uint32]obTickable),
+		d:   time.Duration(1.0/framerate*1000.0) * time.Millisecond,
 	}, nil
 }
 
@@ -285,7 +310,7 @@ func CreateEventObserver[O any, T any](
 		panic("ob can not be nil")
 	}
 	if ctrl == nil {
-		ctrl = NewObsController(0, 0) // use separate controller
+		ctrl = NewObsController(ObsControlCfg{}) // use separate controller
 	}
 	if hook == nil {
 		hook = &ObserveProtectedHook[O, T]{} // use default hook
@@ -311,7 +336,7 @@ func CreateFrameObserver[O any, T any](
 		panic("ob can not be nil")
 	}
 	if ctrl == nil {
-		ctrl = NewObsController(0, 0) // use separate controller
+		ctrl = NewObsController(ObsControlCfg{}) // use separate controller
 	}
 	if hook == nil {
 		hook = &ObserveProtectedHook[O, T]{} // use default hook
@@ -393,37 +418,62 @@ func (tk *obsFrameTicker) TotalSkipped() int64 {
 	return atomic.LoadInt64(&tk.totalskipped)
 }
 
-// TotalFrames return total frames
+// TotalFrames return total executed frames
 func (tk *obsFrameTicker) TotalFrames() int64 {
 	return atomic.LoadInt64(&tk.totalframe)
 }
 
+// TickCount return count of ticks
+func (tk *obsFrameTicker) TickCount() int64 {
+	return atomic.LoadInt64(&tk.totalframe)
+}
+
 // switchTo change current active observer
-func (tk *obsFrameTicker) switchTo(ob obTickable) {
+func (tk *obsFrameTicker) switchTo(ob obTickable, stateID StateID) {
 	tk.mux.Lock()
 	defer tk.mux.Unlock()
-	tk.ob = ob
+	tk.obs[stateID.SMSerial] = ob
 	if tk.ticker == nil {
 		// start ticker on first switching
 		tk.ticker = time.NewTicker(tk.d)
 		go func() {
 			for {
 				<-tk.ticker.C
-				atomic.AddInt64(&tk.totalframe, 1)
+				atomic.StoreInt64(&tk.tickcount, 0)
 				func() {
 					tk.mux.RLock()
 					defer tk.mux.RUnlock()
-					if atomic.CompareAndSwapInt32(&tk.processing, 0, 1) {
-						tk.skipWarnIf = tk.ob.skipWarn
-						tk.ob.tick(func() { // reset skipped frame on start processing event
-							atomic.StoreInt64(&tk.skipped, 0)
-						}, func() { // reset processing flag on finish processing event
-							atomic.StoreInt32(&tk.processing, 0)
-						})
-					} else if tk.skipWarnIf != nil { // skip frame
+					if len(tk.obs) == 0 {
+						return
+					}
+					if atomic.CompareAndSwapInt32(&tk.processing, 0, int32(len(tk.obs))) {
+						// check whether all observers are been trigged and clean frame
+						// skiped counter
+						resetSkip := func(countOb int32) func() {
+							return func() {
+								if atomic.AddInt32(&countOb, -1) == 0 {
+									atomic.AddInt64(&tk.totalframe, 1)
+									atomic.StoreInt64(&tk.skipped, 0)
+								}
+							}
+						}(int32(len(tk.obs)))
+						for _, ob := range tk.obs {
+							//atomic.AddInt32(&tk.processing, 1)
+							ob.tick(resetSkip,
+								/*func() { // reset skipped frame on start processing event
+									atomic.StoreInt64(&tk.skipped, 0)
+								},*/
+								func() { // reset processing flag on finish processing event
+									//atomic.StoreInt32(&tk.processing, 0)
+									atomic.AddInt32(&tk.processing, -1)
+								})
+						}
+					} else { // skip frame
 						atomic.AddInt64(&tk.skipped, 1)
 						atomic.AddInt64(&tk.totalskipped, 1)
-						tk.skipWarnIf()
+						for _, ob := range tk.obs {
+							ob.skipWarn()
+						}
 					}
 				}()
 			}
@@ -647,7 +697,7 @@ func (foa *frameObAgent[O, T]) startOb(
 			foa.val = val
 		}
 		foa.updateEv(FEvEnter)
-		foa.ticker.switchTo(foa)
+		foa.ticker.switchTo(foa, id)
 	}
 	return nil
 }
@@ -665,7 +715,7 @@ func (foa *frameObAgent[O, T]) enter(owner O, id StateID, val T) {
 	}
 	foa.owner = owner
 	foa.updateEv(FEvEnter)
-	foa.ticker.switchTo(foa)
+	foa.ticker.switchTo(foa, id)
 }
 
 func (foa *frameObAgent[O, T]) exit(owner O, id StateID, val T) {

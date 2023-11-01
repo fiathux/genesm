@@ -77,13 +77,13 @@ func (eb *eventBind[O, A, B]) Trigger() (rerr error) {
 			} else {
 				rerr = ErrEvUnexpectedState
 			}
-			return STIDInvalid
+			return STIDInvalid()
 		}
 		if eb.hook != nil {
 			rerr = eb.hook(eb.sm.owner, eb.a.Get(), eb.b.Get())
 		}
 		if rerr != nil {
-			return STIDInvalid
+			return STIDInvalid()
 		}
 		return eb.b.ID()
 	})

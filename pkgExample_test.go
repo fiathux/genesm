@@ -31,7 +31,7 @@ func Example() {
 	var (
 		stateA int         = 10
 		stateB string      = "stateB"
-		stateC int         = 100
+		stateC int32       = 100
 		stateD StructState = StructState{
 			a: 20,
 			b: "stateD",
@@ -70,7 +70,7 @@ func Example() {
 	eC2D := RegEvent(sm, bndC, bndD)
 	eE2A := RegEvent(sm, bndE, bndA)
 
-	obctr := NewObsController(0, 0)
+	obctr := NewObsController(ObsControlCfg{})
 	// add observer
 	bndA.AddObserver(CreateEventObserver(obctr, ObsEventFuncs(
 		func(owner string, id StateID, val int) { // enter
@@ -89,10 +89,10 @@ func Example() {
 		}, nil, nil,
 	), nil))
 	bndC.AddObserver(CreateEventObserver(obctr, ObsEventFuncs(
-		func(owner string, id StateID, val int) {
+		func(owner string, id StateID, val int32) {
 			fmt.Println("StateC Enter, val:", val)
 		},
-		func(owner string, id StateID, val int) {
+		func(owner string, id StateID, val int32) {
 			fmt.Println("StateC Exit, val:", val)
 		}, nil, nil,
 	), nil))

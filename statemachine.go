@@ -3,6 +3,8 @@ package genesm
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // state machine errors
@@ -16,9 +18,22 @@ var (
 )
 
 // StateID is serial number to identify a registed state
-type StateID int
+type StateID struct {
+	SMSerial  uint32
+	RegSerial int
+}
 
-const STIDInvalid StateID = -1
+// STIDInvalid return a StateID which represent invalid state
+func STIDInvalid() StateID {
+	return StateID{
+		SMSerial:  0,
+		RegSerial: -1,
+	}
+}
+
+// statemachineSerial is a global serial number to generate unique ID for state
+// machine
+var statemachineSerial = uint32(time.Now().UnixNano() % 0x80000000)
 
 // A StateMachine is use for manage DFA State objects.
 //
@@ -33,14 +48,18 @@ const STIDInvalid StateID = -1
 type StateMachine[O any] struct {
 	mux      sync.RWMutex
 	owner    O
+	smSerial uint32
 	stateTab []stateAgent[O]
 	stateOn  StateID
 }
 
 // NewStateMachine create a new state machine instance
 func NewStateMachine[O any](owner O) *StateMachine[O] {
+	seq := atomic.AddUint32(&statemachineSerial, 1)
 	return &StateMachine[O]{
-		owner: owner,
+		smSerial: seq,
+		stateOn:  StateID{SMSerial: seq},
+		owner:    owner,
 	}
 }
 
@@ -63,9 +82,14 @@ func (sm *StateMachine[O]) StateID() StateID {
 	sm.mux.RLock()
 	defer sm.mux.RUnlock()
 	if len(sm.stateTab) == 0 {
-		return STIDInvalid
+		return STIDInvalid()
 	}
 	return sm.stateOn
+}
+
+// Serial get serial number of StateMachine
+func (sm *StateMachine[O]) Serial() uint32 {
+	return sm.smSerial
 }
 
 // PickState trigger a Pick action on current selected state
@@ -75,7 +99,7 @@ func (sm *StateMachine[O]) PickState() error {
 	if len(sm.stateTab) == 0 {
 		return ErrNoState
 	}
-	sm.stateTab[sm.stateOn].onPick(sm.owner)
+	sm.stateTab[sm.stateOn.RegSerial].onPick(sm.owner)
 	return nil
 }
 
@@ -87,7 +111,10 @@ func (sm *StateMachine[O]) PickState() error {
 func (sm *StateMachine[O]) regState(convert func(StateID) stateAgent[O]) {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
-	s := convert(StateID(len(sm.stateTab)))
+	s := convert(StateID{
+		SMSerial:  sm.smSerial,
+		RegSerial: len(sm.stateTab),
+	})
 	sm.stateTab = append(sm.stateTab, s)
 }
 
@@ -102,13 +129,18 @@ func (sm *StateMachine[O]) transform(trs func(StateID) StateID) error {
 	next := trs(sm.stateOn)
 	if next == sm.stateOn { // transform is done before
 		return ErrEvNothingTodo
-	} else if next < 0 { // break transform
+	} else if next.IsInvalid() { // break transform
 		return nil
-	} else if next >= StateID(len(sm.stateTab)) {
+	} else if next.RegSerial >= len(sm.stateTab) {
 		return ErrEvInvalidChange
 	}
-	sm.stateTab[sm.stateOn].onExit(sm.owner)
+	sm.stateTab[sm.stateOn.RegSerial].onExit(sm.owner)
 	sm.stateOn = next
-	sm.stateTab[next].onEnter(sm.owner)
+	sm.stateTab[next.RegSerial].onEnter(sm.owner)
 	return nil
+}
+
+// IsInvalid check whether stateID is invalid
+func (s StateID) IsInvalid() bool {
+	return s.RegSerial < 0 || s.SMSerial == 0
 }
