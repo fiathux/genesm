@@ -301,7 +301,7 @@ func TestFrameObserver(t *testing.T) {
 		So(tk.TotalFrames(), ShouldEqual, fms)
 		t.Log("RESET")
 		tk.Reset(20)
-		time.Sleep(1030 * time.Millisecond)
+		time.Sleep(1010 * time.Millisecond)
 		So(tk.TickCount()-tcs, ShouldEqual, 20)
 		So(20-tk.TotalFrames()-fms <= 1, ShouldBeTrue)
 	})

@@ -142,7 +142,7 @@ func initMgr(ctx context.Context, wd *Window) <-chan struct{} {
 	// time-based observer will draw graphic and update status for a actived scene
 
 	// create controller for time-based observer
-	ctrFm := genesm.NewObsController(genesm.ObsControlCfg{})
+	ctrFm := genesm.NewObsSyncController(0)
 
 	// create ticker
 	ticker, _ := genesm.CreateObsFrameTicker(frameRate)

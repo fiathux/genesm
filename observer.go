@@ -171,18 +171,18 @@ type ObsController interface {
 //
 // Minimum value of maxBlock is 1. pass zero to maxBlock will be treat as 1.
 //
-// LenEventQueue is size of event execute queue. if a handler of event is
+// SizeEventQueue is size of event execute queue. if a handler of event is
 // blocked, next event will waiting in the queue until previous handler return
 // or timeout. if queue is full, whole event chain under state machine will be
-// blocked. default value of LenEventQueue is 5.
+// blocked. default value of SizeEventQueue is 5.
 //
-// LenWarnChan is length of channel to report warning. default value is 3. if
+// SizeWarnChan is length of channel to report warning. default value is 3. if
 // channel is full, the message of warning will be lost.
 type ObsControlCfg struct {
-	Timeout       time.Duration
-	MaxBlock      uint32
-	LenEventQueue uint32
-	LenWarnChan   uint32
+	Timeout        time.Duration
+	MaxBlock       uint32
+	SizeEventQueue uint32
+	SizeWarnChan   uint32
 }
 
 // obsControllerImpl is a implementation of ObsController
@@ -200,21 +200,43 @@ func NewObsController(cfg ObsControlCfg) ObsController {
 	if cfg.MaxBlock == 0 {
 		cfg.MaxBlock = 1
 	}
-	if cfg.LenEventQueue == 0 {
-		cfg.LenEventQueue = 5
+	if cfg.SizeEventQueue == 0 {
+		cfg.SizeEventQueue = 5
 	}
-	if cfg.LenWarnChan == 0 {
-		cfg.LenWarnChan = 3
+	if cfg.SizeWarnChan == 0 {
+		cfg.SizeWarnChan = 3
 	}
 	ret := &obsControllerImpl{
-		evtCh:           make(chan func(), cfg.LenEventQueue),
+		evtCh:           make(chan func(), cfg.SizeEventQueue),
 		evtRt:           make(chan struct{}, 1),
 		blockingTimeout: cfg.Timeout,
 		maxBlock:        cfg.MaxBlock,
-		warnChan:        make(chan ObWarning, cfg.LenWarnChan),
+		warnChan:        make(chan ObWarning, cfg.SizeWarnChan),
 	}
 	ret.init()
 	return ret
+}
+
+// obsSyncControllerImpl is a synchonous ObsController implementation
+type obsSyncControllerImpl struct {
+	warnChan chan ObWarning // channel for warning report
+}
+
+// NewObsSyncController create a new synchonous ObsController.
+//
+// synchonous ObsController is directly handle event of observer. which have
+// minimal delay, but will block thread of state machine.
+//
+// An exception is time based observer (frame observer). it have own thread to
+// trigger frames. so if you don't care about tick timeout, synchonous
+// ObsController have high performance.
+func NewObsSyncController(sizeWarnChan uint32) ObsController {
+	if sizeWarnChan == 0 {
+		sizeWarnChan = 3
+	}
+	return &obsSyncControllerImpl{
+		warnChan: make(chan ObWarning, sizeWarnChan),
+	}
 }
 
 // eventObCollector is base struct of observer implementation
@@ -458,13 +480,8 @@ func (tk *obsFrameTicker) switchTo(ob obTickable, stateID StateID) {
 							}
 						}(int32(len(tk.obs)))
 						for _, ob := range tk.obs {
-							//atomic.AddInt32(&tk.processing, 1)
 							ob.tick(resetSkip,
-								/*func() { // reset skipped frame on start processing event
-									atomic.StoreInt64(&tk.skipped, 0)
-								},*/
 								func() { // reset processing flag on finish processing event
-									//atomic.StoreInt32(&tk.processing, 0)
 									atomic.AddInt32(&tk.processing, -1)
 								})
 						}
@@ -563,6 +580,52 @@ func (ctrl *obsControllerImpl) packEvent(
 // Warning retrieve a channel to receive observer warning
 func (ctrl *obsControllerImpl) Warning() <-chan ObWarning {
 	return ctrl.warnChan
+}
+
+// --------------- ObsController implementation ---------------
+
+// init initialize controller
+func (sctrl *obsSyncControllerImpl) init() {
+}
+
+// run run a function directly
+func (sctrl *obsSyncControllerImpl) run(f func()) {
+	f()
+}
+
+// warn send a warning
+func (sctrl *obsSyncControllerImpl) warn(w WarningType, stateID StateID) {
+	select {
+	case sctrl.warnChan <- ObWarning{
+		Type:    w,
+		Ts:      time.Now(),
+		StateID: stateID,
+	}:
+	default:
+	}
+}
+
+// packEvent pack a event function
+func (sctrl *obsSyncControllerImpl) packEvent(
+	stateID StateID, wtimeout WarningType, f func(),
+	runHook func(), retHook func(timeout bool),
+) func() {
+	return func() {
+		defer func() {
+			if retHook != nil {
+				retHook(false)
+			}
+		}()
+		if runHook != nil {
+			runHook()
+		}
+		f()
+	}
+}
+
+// Warning retrieve a channel to receive observer warning
+func (sctrl *obsSyncControllerImpl) Warning() <-chan ObWarning {
+	return sctrl.warnChan
 }
 
 // --------------- eventObCollector methods ---------------
