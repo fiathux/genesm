@@ -306,3 +306,120 @@ func TestFrameObserver(t *testing.T) {
 		So(20-tk.TotalFrames()-fms <= 1, ShouldBeTrue)
 	})
 }
+
+func TestSyncController(t *testing.T) {
+	Convey("Test synchronize controller", t, func() {
+		ctr := NewObsSyncController(1)
+		gothr := []bool{
+			false, false, false, false, false, false, false, false, false,
+			false, false, false, false,
+		}
+		ob1 := CreateEventObserver(
+			ctr,
+			ObsEventFuncs(
+				func(owner string, id StateID, val int) {
+					gothr[0] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[1] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[2] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[3] = true
+				},
+			),
+			NewObserveProtectedHook(
+				func(owner string, id StateID, val int) int {
+					gothr[4] = true
+					return val
+				},
+				func(owner string, id StateID, val int) (int, bool) {
+					gothr[5] = true
+					return val, false
+				},
+				func(owner string, id StateID, val int) (int, bool) {
+					gothr[6] = true
+					return val, false
+				},
+				func(owner string, id StateID, val int) (int, bool) {
+					gothr[7] = true
+					return val, false
+				},
+				func(owner string, id StateID, val int) (int, bool) {
+					gothr[8] = true
+					return val, false
+				},
+			))
+		ob2 := CreateEventObserver(
+			ctr,
+			ObsEventFuncs(
+				func(owner string, id StateID, val int) {
+					gothr[9] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[10] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[11] = true
+				},
+				func(owner string, id StateID, val int) {
+					gothr[12] = true
+				},
+			), nil)
+
+		// Test sync with hook
+		ob1.enter("owner", StateID{1, 1}, 1)
+		So(gothr[0], ShouldBeTrue)
+		So(gothr[4], ShouldBeFalse)
+		So(gothr[5], ShouldBeTrue)
+		ob1.exit("owner", StateID{1, 1}, 2)
+		So(gothr[1], ShouldBeTrue)
+		So(gothr[6], ShouldBeTrue)
+		ob1.pick("owner", StateID{1, 1}, 3)
+		So(gothr[2], ShouldBeTrue)
+		So(gothr[7], ShouldBeTrue)
+		ob1.update("owner", StateID{1, 1}, 4)
+		So(gothr[3], ShouldBeTrue)
+		So(gothr[8], ShouldBeTrue)
+		ctr.(*obsSyncControllerImpl).init() // will do nothing
+		So(gothr[4], ShouldBeFalse)
+
+		// Test sync without hook
+		ob2.enter("owner", StateID{1, 1}, 1)
+		ob2.exit("owner", StateID{1, 1}, 2)
+		ob2.pick("owner", StateID{1, 1}, 3)
+		ob2.update("owner", StateID{1, 1}, 4)
+		So(gothr[9], ShouldBeTrue)
+		So(gothr[10], ShouldBeTrue)
+		So(gothr[11], ShouldBeTrue)
+		So(gothr[12], ShouldBeTrue)
+
+		ctr.warn(ObWFrameSkip, StateID{0, 0})
+		select {
+		case wev := <-ctr.Warning():
+			So(wev.Type, ShouldEqual, ObWFrameSkip)
+			So(wev.StateID, ShouldResemble, StateID{0, 0})
+		default:
+			t.Error("No warning event")
+		}
+
+		// test call hook
+		pkthr := []bool{false, false, false}
+		pked := ctr.packEvent(StateID{0, 0}, ObWEnterTimeout,
+			func() {
+				pkthr[0] = true
+			},
+			func() {
+				pkthr[1] = true
+			}, func(b bool) {
+				So(b, ShouldBeFalse)
+				pkthr[2] = true
+			})
+		pked()
+		So(pkthr[0], ShouldBeTrue)
+		So(pkthr[1], ShouldBeTrue)
+		So(pkthr[2], ShouldBeTrue)
+	})
+}

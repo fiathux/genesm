@@ -229,7 +229,7 @@ type obsSyncControllerImpl struct {
 //
 // An exception is time based observer (frame observer). it have own thread to
 // trigger frames. so if you don't care about tick timeout, synchonous
-// ObsController have high performance.
+// ObsController will have higher performance.
 func NewObsSyncController(sizeWarnChan uint32) ObsController {
 	if sizeWarnChan == 0 {
 		sizeWarnChan = 3
